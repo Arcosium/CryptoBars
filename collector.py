@@ -247,8 +247,9 @@ def main(argv=None):
         return 0
     if a.stats:
         import duckdb
-        print(duckdb.sql(f"""SELECT date, count(*) rows, count(DISTINCT base) bases,
-                                    count(DISTINCT ts) minutes
+        # `rows` 는 DuckDB 예약어라 별칭으로 못 쓴다.
+        print(duckdb.sql(f"""SELECT date, count(*) n_rows, count(DISTINCT base) bases,
+                                    count(DISTINCT ts) n_minutes
                              FROM read_parquet('{BARS}/**/*.parquet', hive_partitioning=1)
                              GROUP BY 1 ORDER BY 1""").df().to_string())
         return 0
