@@ -248,8 +248,10 @@ def main(argv=None):
     if a.stats:
         import duckdb
         # `rows` 는 DuckDB 예약어라 별칭으로 못 쓴다.
-        print(duckdb.sql(f"""SELECT date, count(*) n_rows, count(DISTINCT base) bases,
-                                    count(DISTINCT ts) n_minutes
+        # n_rows 는 part 간 중복을 포함한 날것, n_unique 가 read_bars() 가 실제로 돌려주는 수다.
+        print(duckdb.sql(f"""SELECT date, count(*) n_rows,
+                                    count(DISTINCT ts || '|' || base) n_unique,
+                                    count(DISTINCT base) bases, count(DISTINCT ts) n_minutes
                              FROM read_parquet('{BARS}/**/*.parquet', hive_partitioning=1)
                              GROUP BY 1 ORDER BY 1""").df().to_string())
         return 0
