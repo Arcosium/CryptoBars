@@ -47,6 +47,8 @@ LOOKBACK = int(os.getenv("CRYPTOBARS_LOOKBACK", "5"))
 BACKFILL = int(os.getenv("CRYPTOBARS_BACKFILL", "240"))
 FLUSH_MINUTES = int(os.getenv("CRYPTOBARS_FLUSH_MINUTES", "10"))
 UNIVERSE_TTL_H = int(os.getenv("CRYPTOBARS_UNIVERSE_TTL_H", "6"))
+# 하루 한 번 지난 날짜 버퍼를 history(정본)로 접는다. 백필이 도는 동안엔 0 으로 꺼둔다.
+COMPACT = os.getenv("CRYPTOBARS_COMPACT", "1") not in ("0", "false", "")
 ENABLED = tuple(v for v in os.getenv("CRYPTOBARS_VENUES", ",".join(venues.VENUES)).split(",") if v)
 
 SCHEMA = pa.schema([
@@ -176,6 +178,15 @@ class Store:
         return n
 
 
+def _compact_safely():
+    """수집 루프가 compaction 예외로 죽지 않게 감싼다."""
+    try:
+        from compact import compact_once
+        log.info("compaction 결과: %s", compact_once())
+    except Exception as e:
+        log.error("compaction 실패(수집은 계속): %s", e)
+
+
 def run_forever(stop=None, cycles=None):
     """메인 루프. 매분 CYCLE_SECOND 초에 수집하고, 어떤 예외도 루프를 죽이지 않는다."""
     BARS.mkdir(parents=True, exist_ok=True)
@@ -186,6 +197,7 @@ def run_forever(stop=None, cycles=None):
              sorted({u["venue"] for u in universe}))
 
     limit, done, last_flush = max(BACKFILL, LOOKBACK), 0, time.time()
+    last_compact_day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     while not (stop and stop.is_set()) and (cycles is None or done < cycles):
         # 다음 분 CYCLE_SECOND 초까지 대기
         nxt = (int(time.time()) // 60 + 1) * 60 + CYCLE_SECOND
@@ -217,18 +229,40 @@ def run_forever(stop=None, cycles=None):
                 universe = load_universe(client)     # TTL 지나면 내부에서 갱신
             except Exception as e:
                 log.error("유니버스 재적재 실패: %s", e)
+            # UTC 날짜가 바뀌면 지난 날짜 버퍼를 history(정본)로 접는다. 수집 루프를 막지 않게
+            # 별도 스레드로 돌린다 — 한 달 파일을 통째로 다시 쓰는 작업이라 몇 분 걸릴 수 있다.
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            if COMPACT and today != last_compact_day:
+                last_compact_day = today
+                threading.Thread(target=_compact_safely, name="compact", daemon=True).start()
     log.info("종료 flush: %d행 저장", store.flush())
 
 
 # ── 읽기 ────────────────────────────────────────────────────────────────
-def read_bars(where="", root: Path = BARS):
-    """(ts, base) 중복을 제거한 DataFrame. 예: read_bars("base='BTC'")"""
+def read_bars(where=""):
+    """과거(history) + 아직 안 접힌 수집분(bars)을 합쳐 (ts, base) 중복을 제거한 DataFrame.
+
+    예: read_bars("base = 'BTC'"). 두 저장소를 다 봐야 하는 이유는 compaction 이 하루 한 번이라
+    오늘 치는 아직 bars 에만 있기 때문이다. 겹치면 history 를 우선한다(거래소 확정봉).
+    """
     import duckdb
+    cols = ", ".join(f.name for f in SCHEMA)
+    parts = []
+    if any((DATA / "history").glob("base=*")):
+        parts.append(f"SELECT {cols}, 0 src FROM read_parquet('{DATA}/history/**/*.parquet',"
+                     " union_by_name=true)")
+    if any(BARS.glob("date=*")):
+        parts.append(f"SELECT {cols}, 1 src FROM read_parquet('{BARS}/**/*.parquet',"
+                     " hive_partitioning=1)")
+    if not parts:
+        import pandas as pd
+        return pd.DataFrame(columns=[f.name for f in SCHEMA])
+    union = " UNION ALL ".join(parts)
     cond = f"WHERE {where}" if where else ""
     return duckdb.sql(f"""
-        SELECT * EXCLUDE(rn) FROM (
-          SELECT *, row_number() OVER (PARTITION BY ts, base ORDER BY quote_volume DESC NULLS LAST) rn
-          FROM read_parquet('{root}/**/*.parquet', hive_partitioning=1) {cond})
+        SELECT {cols} FROM (
+          SELECT *, row_number() OVER (PARTITION BY ts, base ORDER BY src) rn
+          FROM ({union}) {cond})
         WHERE rn = 1 ORDER BY ts, base""").df()
 
 

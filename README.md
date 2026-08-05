@@ -45,10 +45,20 @@ journalctl -u cryptobars.service -f
 
 ## 저장 형식
 
+정본은 `data/history` 하나다. 수집기는 `data/bars` 에 먼저 쌓고, 하루가 지나면
+`compact.py` 가 그날 치를 종목별 월 파일로 접어 넣은 뒤 버퍼를 지운다.
+그래서 **3년치 위에 실시간 수집분이 계속 얹힌다.**
+
 ```
-data/universe.csv                                  # base → 거래소 배정 (감사용)
-data/bars/date=YYYY-MM-DD/part-<UTC타임스탬프>.parquet
+data/history/base=<BASE>/part-<YYYY-MM>.parquet   # 정본 (2023-01-01 ~ 계속)
+data/bars/date=YYYY-MM-DD/part-<UTC>.parquet      # 오늘 치 버퍼 (내일 접힌다)
+data/universe.csv                                 # base → 거래소 배정 (감사용)
+data/history_universe.csv                         # 백필 대상 (상장폐지 포함)
 ```
+
+compaction 은 수집기가 UTC 날짜가 바뀔 때 스레드로 돌린다(수집 루프를 막지 않는다).
+`CRYPTOBARS_COMPACT=0` 으로 끌 수 있고, `python compact.py` 로 수동 실행도 된다.
+**백필이 도는 동안엔 자동으로 건너뛴다** — 같은 월 파일을 양쪽에서 쓰면 한쪽이 사라진다.
 
 컬럼: `ts`(봉 시작 UTC epoch ms) · `venue` · `base` · `symbol` · `open` `high` `low` `close`
 · `volume`(base 수량) · `quote_volume`(달러, 모르면 null)

@@ -101,6 +101,52 @@ def test_unclosed_candle_is_dropped():
     assert [r["ts"] for r in rows] == [NOW - 60_000], rows
 
 
+def test_compaction_folds_past_days_and_keeps_today():
+    """수집 버퍼가 history 로 접히고, 오늘 치는 남아야 한다. 잘못 접으면 데이터가 사라진다."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    import compact as C
+    from collector import SCHEMA
+
+    def rows(ts, base, close):
+        return [{"ts": ts, "venue": "binance", "base": base, "symbol": base + "USDT",
+                 "open": close, "high": close, "low": close, "close": close,
+                 "volume": 1.0, "quote_volume": None}]
+
+    def put(p, rs):
+        p.parent.mkdir(parents=True, exist_ok=True)
+        pq.write_table(pa.table({f.name: [r[f.name] for r in rs] for f in SCHEMA}, schema=SCHEMA), p)
+
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc)
+    t_today = int(today.replace(hour=0, minute=5, second=0, microsecond=0).timestamp() * 1000)
+    t_old = t_today - 3 * 86_400_000
+    d_today, d_old = (datetime.fromtimestamp(t / 1000, timezone.utc).strftime("%Y-%m-%d")
+                      for t in (t_today, t_old))
+
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        C.BARS, C.HISTORY = root / "bars", root / "history"
+        C.backfill_running = lambda: False
+        put(C.BARS / f"date={d_old}" / "part-a.parquet", rows(t_old, "BTC", 1.0))
+        put(C.BARS / f"date={d_today}" / "part-b.parquet", rows(t_today, "BTC", 2.0))
+        # 백필이 이미 같은 달에 남긴 행 — 병합되어야지 덮여 사라지면 안 된다
+        put(C.HISTORY / "base=BTC" / f"part-{d_old[:7]}.parquet", rows(t_old - 60_000, "BTC", 9.0))
+
+        r = C.compact_once()
+        assert r["days"] == 1 and r["rows"] == 1, r
+        assert not (C.BARS / f"date={d_old}").exists(), "접은 날짜 버퍼는 지워야 한다"
+        assert (C.BARS / f"date={d_today}").exists(), "오늘 치는 아직 수집 중이라 남겨야 한다"
+        got = {r["ts"]: r["close"] for r in
+               pq.read_table(C.HISTORY / "base=BTC" / f"part-{d_old[:7]}.parquet").to_pylist()}
+        assert got == {t_old - 60_000: 9.0, t_old: 1.0}, got
+
+        C.backfill_running = lambda: True          # 백필 중이면 손대지 않는다
+        put(C.BARS / f"date={d_old}" / "part-c.parquet", rows(t_old, "BTC", 3.0))
+        assert C.compact_once()["skipped"] == "backfill"
+        assert (C.BARS / f"date={d_old}").exists()
+
+
 def test_base_of_strips_longest_quote_first():
     """'ADABUSD' 를 'ADAB'+USD 로 자르면 유니버스에 유령 종목이 생긴다(BUSD 를 USD 보다 먼저 봐야 함)."""
     from backfill import base_of
