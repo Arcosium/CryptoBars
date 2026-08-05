@@ -59,6 +59,18 @@ BYBIT_TRADES = "https://public.bybit.com/trading"
 
 QUOTES = ("USDT", "USDC", "BUSD", "USD")      # 긴 것 먼저 — 'ADABUSD' 를 'ADAB'+USD 로 자르면 안 된다
 
+# 한 코인이 여러 마켓에 상장돼 있을 때 어느 마켓을 쓸지. **알파벳 순으로 고르면 안 된다** —
+# 'BTCBUSD' < 'BTCUSDT' 라서 BUSD 가 이기는데, binance 가 BUSD 를 2023~24 에 폐지해
+# BTC·ETH·BNB 같은 메이저가 2024년 중반부터 통째로 비어버린다(2026-08-05 실측·수정).
+QUOTE_RANK = {"USDT": 0, "USDC": 1, "USD": 2, "BUSD": 3}
+
+
+def quote_rank(symbol: str) -> int:
+    for q in QUOTES:
+        if symbol.endswith(q):
+            return QUOTE_RANK.get(q, 9)
+    return 9
+
 
 def base_of(symbol: str) -> str:
     for q in QUOTES:
@@ -262,11 +274,12 @@ def history_universe(c, rebuild=False) -> list[dict]:
             seen.add(b)
             out.append({"base": b, "symbol": symbol, "source": source})
 
-    for s in sorted(bn):
+    key = lambda s: (base_of(s), quote_rank(s), s)   # noqa: E731 — 마켓 우선순위대로 먼저 오게
+    for s in sorted(bn, key=key):
         add(s, "binance")
-    for s in sorted(by_live):
+    for s in sorted(by_live, key=key):
         add(s, "bybit")
-    for s in sorted(by_gone):
+    for s in sorted(by_gone, key=key):
         add(s, "bybit_trades")
 
     UNIVERSE_CSV.parent.mkdir(parents=True, exist_ok=True)

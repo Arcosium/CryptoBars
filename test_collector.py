@@ -156,6 +156,22 @@ def test_base_of_strips_longest_quote_first():
         assert base_of(sym) == want, f"{sym} → {base_of(sym)} != {want}"
 
 
+def test_quote_priority_beats_alphabetical():
+    """한 코인이 여러 마켓에 있으면 USDT 를 골라야 한다.
+
+    실제로 터진 사고(2026-08-05): 알파벳 순으로 골라 'BTCBUSD' < 'BTCUSDT' 라서 BUSD 가 이겼고,
+    binance 가 BUSD 를 폐지한 2024년 중반부터 BTC·ETH·BNB 등 66종목이 통째로 비었다.
+    파일이 안 생겼을 뿐 예외는 안 나서 '실패 0건'으로 조용히 넘어갔다.
+    """
+    from backfill import base_of, quote_rank
+    for syms, want in [(["BTCBUSD", "BTCUSDT", "BTCUSDC"], "BTCUSDT"),
+                       (["ADABUSD", "ADAUSDT"], "ADAUSDT"),
+                       (["ARBUSDC", "ARBUSDT"], "ARBUSDT"),
+                       (["XPLUSDC"], "XPLUSDC")]:          # USDT 가 없으면 USDC 가 정답
+        got = sorted(syms, key=lambda s: (base_of(s), quote_rank(s), s))[0]
+        assert got == want, f"{syms} → {got} != {want}"
+
+
 def test_month_helpers():
     from datetime import datetime, timezone
     from backfill import month_bounds, months
