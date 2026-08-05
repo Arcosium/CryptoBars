@@ -106,18 +106,21 @@ def write_metadata(con, rows: list[dict]):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description="팀 전달용 Parquet·CSV 내보내기 + 드라이브 업로드")
+    # 기본은 Parquet 만(사장 지시 2026-08-05). CSV 는 필요할 때 --csv 로.
     p.add_argument("--csv", action="store_true")
     p.add_argument("--parquet", action="store_true")
+    p.add_argument("--no-parquet", dest="parquet", action="store_false")
     p.add_argument("--upload", action="store_true", help="rclone 으로 구글드라이브 전송")
     p.add_argument("--remote", default="gdrive:CryptoBars")
     p.add_argument("--limit", type=int, default=None, help="종목 수 제한(시험용)")
     a = p.parse_args(argv)
     if not (a.csv or a.parquet):
-        a.csv = a.parquet = True
+        a.parquet = True
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-    for sub in ("parquet", "csv"):
-        (EXPORT / sub).mkdir(parents=True, exist_ok=True)
+    for sub, want in (("parquet", a.parquet), ("csv", a.csv)):
+        if want:                       # 안 만들 형식의 빈 폴더가 드라이브에 올라가지 않게
+            (EXPORT / sub).mkdir(parents=True, exist_ok=True)
     con = duckdb.connect()
     con.execute("PRAGMA threads=8")
 
