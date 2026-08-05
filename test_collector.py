@@ -101,6 +101,26 @@ def test_unclosed_candle_is_dropped():
     assert [r["ts"] for r in rows] == [NOW - 60_000], rows
 
 
+def test_base_of_strips_longest_quote_first():
+    """'ADABUSD' 를 'ADAB'+USD 로 자르면 유니버스에 유령 종목이 생긴다(BUSD 를 USD 보다 먼저 봐야 함)."""
+    from backfill import base_of
+    for sym, want in [("BTCUSDT", "BTC"), ("BTCUSDC", "BTC"), ("ADABUSD", "ADA"),
+                      ("1000LUNCBUSD", "1000LUNC"), ("BTCUSD", "BTC"),
+                      ("1000000BABYDOGEUSDT", "1000000BABYDOGE"), ("WEIRD", "WEIRD")]:
+        assert base_of(sym) == want, f"{sym} → {base_of(sym)} != {want}"
+
+
+def test_month_helpers():
+    from datetime import datetime, timezone
+    from backfill import month_bounds, months
+    assert months(datetime(2023, 11, 5, tzinfo=timezone.utc),
+                  datetime(2024, 2, 1, tzinfo=timezone.utc)) == \
+        ["2023-11", "2023-12", "2024-01", "2024-02"]
+    lo, hi = month_bounds("2023-12")          # 연말 경계에서 다음 달 계산이 틀리기 쉽다
+    assert datetime.fromtimestamp(lo / 1000, timezone.utc).strftime("%Y-%m-%d") == "2023-12-01"
+    assert datetime.fromtimestamp(hi / 1000, timezone.utc).strftime("%Y-%m-%d") == "2024-01-01"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):
