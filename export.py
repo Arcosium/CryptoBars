@@ -112,6 +112,10 @@ def main(argv=None):
     p.add_argument("--parquet", action="store_true")
     p.add_argument("--no-parquet", dest="parquet", action="store_false")
     p.add_argument("--upload", action="store_true", help="rclone 으로 구글드라이브 전송")
+    p.add_argument("--metadata-only", action="store_true",
+                   help="이미 구운 export/parquet 을 읽어 메타데이터만 다시 만든다(굽기 생략)")
+    p.add_argument("--upload-metadata", action="store_true",
+                   help="--upload 시 metadata 폴더만 전송(대용량 parquet 재전송 안 함)")
     p.add_argument("--remote", default="gdrive:CryptoBars")
     p.add_argument("--limit", type=int, default=None, help="종목 수 제한(시험용)")
     a = p.parse_args(argv)
@@ -128,14 +132,25 @@ def main(argv=None):
     upath = DATA / "history_universe.csv"
     uni = ({r["base"]: r for r in csv.DictReader(open(upath, newline="", encoding="utf-8"))}
            if upath.exists() else {})
-    todo = bases()[:a.limit] if a.limit else bases()
-    log.info("내보내기 %d종목 (parquet=%s csv=%s)", len(todo), a.parquet, a.csv)
+    # 메타데이터만 다시 만들 때는 이미 구워둔 export/parquet 을 읽는다 — 그게 실제 전달본이고
+    # history+bars 를 다시 union 하는 것보다 훨씬 싸다. 없는 종목은 자연히 빠진다.
+    if a.metadata_only:
+        todo = sorted(p.stem for p in (EXPORT / "parquet").glob("*.parquet"))
+    else:
+        todo = bases()[:a.limit] if a.limit else bases()
+    log.info("%s %d종목 (parquet=%s csv=%s)",
+             "메타데이터 재생성" if a.metadata_only else "내보내기", len(todo), a.parquet, a.csv)
     meta, t0 = [], time.time()
     for i, b in enumerate(todo, 1):
         try:
-            n = export_one(con, b, a.parquet, a.csv)
+            if a.metadata_only:
+                src = f"read_parquet('{EXPORT}/parquet/{b}.parquet')"
+                n = con.execute(f"SELECT count(*) FROM {src}").fetchone()[0]
+            else:
+                n = export_one(con, b, a.parquet, a.csv)
+                src = f"({query(b)})"
             st = con.execute(f"""SELECT min(ts), max(ts), count(DISTINCT (ts/86400000)::BIGINT)
-                                 FROM ({query(b)})""").fetchone()
+                                 FROM {src}""").fetchone()
             u = uni.get(b, {})
             meta.append({"base": b, "source": u.get("source", ""), "symbol": u.get("symbol", ""),
                          "rows": n,
@@ -154,8 +169,10 @@ def main(argv=None):
              len(meta), sum(m["rows"] for m in meta) / 1e6, (time.time() - t0) / 60)
 
     if a.upload:
-        log.info("드라이브 전송 → %s", a.remote)
-        r = subprocess.run(["rclone", "copy", str(EXPORT), a.remote,
+        src, dst = ((EXPORT / "metadata", a.remote.rstrip("/") + "/metadata")
+                    if a.upload_metadata else (EXPORT, a.remote))
+        log.info("드라이브 전송 → %s", dst)
+        r = subprocess.run(["rclone", "copy", str(src), dst,
                             "--transfers", "8", "--checkers", "16", "--stats", "60s",
                             "--stats-one-line", "--progress"])
         log.info("전송 %s", "완료" if r.returncode == 0 else f"실패(rc={r.returncode})")
