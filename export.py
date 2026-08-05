@@ -80,9 +80,10 @@ def write_metadata(con, rows: list[dict]):
         w.writeheader()
         w.writerows(rows)
 
-    src = DATA / "history_universe.csv"
-    if src.exists():
-        (d / "universe.csv").write_bytes(src.read_bytes())
+    for src, name in ((DATA / "history_universe.csv", "universe.csv"),
+                      (Path(__file__).resolve().parent / "DATASET.md", "DATASET.md")):
+        if src.exists():
+            (d / name).write_bytes(src.read_bytes())
 
     live = sum(not r["delisted"] for r in rows)
     with open(d / "README.csv", "w", newline="", encoding="utf-8") as f:
