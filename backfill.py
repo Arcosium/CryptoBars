@@ -99,13 +99,22 @@ def out_path(base: str, ym: str) -> Path:
 
 
 def write(base: str, ym: str, rows: list[dict]) -> int:
+    """월 파일을 쓴다. 이미 있으면 **덮지 않고 합친다**(ts 기준, 새 행이 이김).
+
+    이번 달 파일에는 수집기가 compaction 으로 넣어둔 행이 이미 들어 있을 수 있다.
+    덮어쓰면 그게 날아간다 — 실제로 2026-08-04 하루가 이렇게 사라졌다(2026-08-06 실측).
+    """
     if not rows:
         return 0
-    rows.sort(key=lambda r: r["ts"])
     p = out_path(base, ym)
+    merged = {}
+    if p.exists():
+        merged = {r["ts"]: r for r in pq.read_table(p).to_pylist()}
+    merged.update({r["ts"]: r for r in rows})
+    out = [merged[k] for k in sorted(merged)]
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".tmp")
-    pq.write_table(pa.table({f.name: [r[f.name] for r in rows] for f in SCHEMA}, schema=SCHEMA),
+    pq.write_table(pa.table({f.name: [r[f.name] for r in out] for f in SCHEMA}, schema=SCHEMA),
                    tmp, compression="zstd")
     tmp.replace(p)                 # 원자적 — 중간에 죽어도 반쪽 파일이 안 남는다
     return len(rows)
@@ -318,7 +327,12 @@ def main(argv=None):
     for u in uni:
         per[u["source"]] += 1
 
-    jobs = [(u, ym) for u in uni for ym in yms if not out_path(u["base"], ym).exists()]
+    # 지난 달들은 파일이 있으면 건너뛴다. 하지만 **최근 2개월은 항상 다시 받는다** —
+    # binance 벌크 덤프는 어제·오늘 치가 아직 안 올라와 있어서, 한 번 받고 끝내면 그 며칠이
+    # 영영 빈 채로 남는다(2026-08-04 가 이렇게 통째로 비었다). write() 가 합치므로 손실은 없다.
+    fresh = set(yms[-2:])
+    jobs = [(u, ym) for u in uni for ym in yms
+            if ym in fresh or not out_path(u["base"], ym).exists()]
     log.info("%s~ %d개월 · %d종목 %s → %d작업 (이미 받음 %d)",
              a.start, len(yms), len(uni), dict(per), len(jobs), len(uni) * len(yms) - len(jobs))
     if a.plan:

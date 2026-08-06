@@ -116,7 +116,12 @@ def main(argv=None):
                    help="이미 구운 export/parquet 을 읽어 메타데이터만 다시 만든다(굽기 생략)")
     p.add_argument("--upload-metadata", action="store_true",
                    help="--upload 시 metadata 폴더만 전송(대용량 parquet 재전송 안 함)")
-    p.add_argument("--remote", default="gdrive:CryptoBars")
+    # 팀 공유 폴더가 최종 전달처다(2026-08-05 이후). 공유 문서함이라 rclone 에
+    # --drive-shared-with-me 가 없으면 경로를 못 찾는다.
+    p.add_argument("--remote", default="gdrive:39기 퀀트팀/하이핀 연합/CryptoBars")
+    p.add_argument("--no-shared", dest="shared", action="store_false",
+                   help="내 드라이브로 보낼 때(공유 문서함이 아닐 때)")
+    p.set_defaults(shared=True)
     p.add_argument("--limit", type=int, default=None, help="종목 수 제한(시험용)")
     a = p.parse_args(argv)
     if not (a.csv or a.parquet):
@@ -173,6 +178,7 @@ def main(argv=None):
                     if a.upload_metadata else (EXPORT, a.remote))
         log.info("드라이브 전송 → %s", dst)
         r = subprocess.run(["rclone", "copy", str(src), dst,
+                            *(["--drive-shared-with-me"] if a.shared else []),
                             "--transfers", "8", "--checkers", "16", "--stats", "60s",
                             "--stats-one-line", "--progress"])
         log.info("전송 %s", "완료" if r.returncode == 0 else f"실패(rc={r.returncode})")
