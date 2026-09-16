@@ -1,17 +1,33 @@
-# CryptoBars — 크립토 전 종목 1분봉 상시 수집기
+# CryptoBars — KRX·NXT·크립토 분봉 수집기
 
 24/7 백그라운드로 **크립토 perp 전 종목(776개)** 의 1분봉을 모아 Parquet 로 쌓는다.
-프론트엔드 없음, 매매 없음, 읽기 전용 공개 API 만 쓴다(키 불필요).
+프론트엔드 없음, 매매 없음, 크립토는 공개 API를 쓰고 NXT 시세는 vault에 보관한 KIS 자격증명을 사용한다. 주문 API는 호출하지 않는다.
 
 QuantInSight 의 KRX 분봉 크롤러(`market_bars/`)와 **같은 원칙**으로 만들었다 —
 매분 증분 수집 + 최근 몇 분 재조회로 자가 치유, 어떤 예외도 루프를 안 죽임, 영구 보존.
-KRX 쪽은 그대로 `quantinsight.service` 안에서 계속 돈다. 이건 별도 유닛이다.
+KRX의 기존 수집 로직은 `equities.py`가 불러 실행한다. `cryptobars.service`가 크립토와 국내 주식 수집을 함께 관리하며 QuantInSight 내부 수집기는 기본 비활성이다.
+
+## 통합 저장 경로
+
+`data`는 `/home/arcosium/vault/CryptoBars/data`를 가리키는 심링크다. ArcTrade의 `minute_data`도 같은 곳을 읽는다.
+
+| 경로 | 데이터 |
+|---|---|
+| `KRX/bars.db` | 기존 KRX 종가·누적 거래량 분봉, 원본 보존 |
+| `KRX/universe.csv` | 기존 국내 주식 유니버스 |
+| `NXT/bars.db` | KIS NX 시세의 완성 OHLCV 분봉 |
+| `bars/`, `history/`, `export/` | 기존 크립토 Parquet와 내보내기 |
+| `USA/` | ArcTrade 조회 시 갱신하는 미국 일봉 캐시 |
+| `equities_status.json` | KRX·NXT 수집 상태 |
+
+QuantInSight의 기존 `data/bars.db` 경로도 KRX 파일로 연결한다. 수집기는 하나만 실행하며 기존 조회 코드는 같은 자료를 계속 읽는다. KRX의 종가만 있는 과거 봉을 임의의 OHLC로 바꾸지 않는다. NXT는 국내 유니버스 중 실제 시세가 반환되는 종목을 수집하며 없는 봉을 만들지 않는다. 최근 봉부터 마지막 저장 시각까지 거슬러 조회해 당일 중단 구간을 복구한다. API가 제공하지 않는 이전 거래일의 누락 구간은 임의로 채우지 않는다.
 
 ## 구성
 
 | 파일 | 역할 |
 |---|---|
 | `venues.py` | 거래소 6곳(binance·bybit·backpack·paradex·grvt·hyperliquid)의 상장목록·1분봉을 공통 스키마로 정규화 |
+| `equities.py` | KRX 기존 수집기 실행 · NXT 전용 분봉 저장 · 중복 실행 방지 |
 | `collector.py` | 유니버스 선정 · 수집 루프 · Parquet 저장 · 조회 헬퍼 · CLI |
 | `test_collector.py` | 네트워크 없이 도는 자체점검 |
 | `cryptobars.service` | systemd 유닛 |

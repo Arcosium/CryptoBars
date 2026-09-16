@@ -5,3 +5,6 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 /.code-review-graph
+
+# Private shared archive symlink
+/data

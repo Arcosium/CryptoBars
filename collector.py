@@ -21,6 +21,7 @@ import csv
 import logging
 import os
 import signal
+import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -293,7 +294,33 @@ def main(argv=None):
     stop = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stop.set())
-    run_forever(stop=stop, cycles=1 if a.once else a.cycles)
+    def supervise_equities():
+        while not stop.is_set():
+            child = subprocess.Popen([
+                os.getenv("EQUITYBARS_PYTHON", "/usr/bin/python3.12"),
+                str(ROOT / "equities.py")])
+            while child.poll() is None and not stop.wait(2):
+                pass
+            if stop.is_set() and child.poll() is None:
+                child.terminate()
+                try:
+                    child.wait(timeout=40)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                    child.wait()
+            if not stop.is_set():
+                log.warning("Equity collector exited; restarting in 10 seconds")
+                stop.wait(10)
+    companion = None
+    if not a.once and os.getenv("EQUITYBARS_ENABLED", "1") == "1":
+        companion = threading.Thread(target=supervise_equities, name="equity-bars", daemon=True)
+        companion.start()
+    try:
+        run_forever(stop=stop, cycles=1 if a.once else a.cycles)
+    finally:
+        stop.set()
+        if companion:
+            companion.join(timeout=45)
     return 0
 
 
