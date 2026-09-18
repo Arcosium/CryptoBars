@@ -12,6 +12,14 @@ until ! pgrep -f 'backfill_kis' >/dev/null 2>&1; do sleep 300; done
 echo "=== 백필 종료 $(date '+%F %T') ==="
 grep -E "^=== " "$D/backfill_kis.log" | tail -2
 
+# 1.5) 보충 패스 — 백필 중 네트워크가 끊긴 (종목,거래일)은 done 에 안 남는다(9/18 5쌍). 한 번 더 돌리면
+#      done 에 없는 것만 받고, 백필이 도는 동안 새로 생긴 거래일도 이때 채워진다.
+cd /home/arcosium/projects/CryptoBars
+echo "=== 보충 패스 시작 $(date '+%F %T') ==="
+echo "=== 보충 패스 $(date '+%F %T') ===" >> "$D/backfill_kis.log"
+/usr/bin/python3 backfill_kis_all.py >> "$D/backfill_kis.log" 2>&1
+echo "보충 패스 종료 — 실패 $(tac "$D/backfill_kis.log" | sed '/=== 보충 패스/q' | grep -cE '실패 +[1-9]') 일"
+
 # 2) 검증 리포트
 python3 - <<'PY'
 import sqlite3, json, time, os

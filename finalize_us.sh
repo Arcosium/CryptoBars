@@ -12,6 +12,19 @@ until ! pgrep -f 'backfill_polygon\.py' >/dev/null 2>&1; do sleep 120; done
 echo "=== 백필 종료 $(date '+%F %T') ==="
 tail -2 "$D/backfill_full.log"
 
+# 1.5) 보충 패스 — 백필 도중 네트워크가 끊기면 그 순간의 종목들이 통째로 빠진다
+#      (9/18 새벽 FAAS~FACA 6종목이 동시에 ConnectTimeout). 받은 달은 파일로, 빈 달은 .empty 마커로
+#      건너뛰므로 다시 돌려도 빠진 것만 받는다. 실패가 남으면 한 번 더.
+cd /home/arcosium/projects/CryptoBars
+for i in 1 2; do
+  echo "=== 보충 패스 $i 시작 $(date '+%F %T') ==="
+  echo "=== 보충 패스 $i $(date '+%F %T') ===" >> "$D/backfill_full.log"
+  /usr/bin/python3 backfill_polygon.py --years 5 --workers 6 --refresh 0 >> "$D/backfill_full.log" 2>&1
+  F=$(tac "$D/backfill_full.log" | sed '/^=== 보충 패스/q' | grep -c '실패')
+  echo "보충 패스 $i 종료 — 실패 $F 건"
+  [ "$F" -eq 0 ] && break
+done
+
 # 2) 데이터가 하나도 없는 종목 폴더 제거 (거래 기록이 없는 심볼)
 EMPTY=$(find "$D/1m" -mindepth 1 -maxdepth 1 -type d -empty | wc -l)
 find "$D/1m" -mindepth 1 -maxdepth 1 -type d -empty -delete

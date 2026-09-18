@@ -54,7 +54,7 @@ def fetch(sess, key, ticker, ym, tries=4):
             time.sleep(2 * (i + 1))
             continue
         if r.status_code == 403:
-            return None  # 요금제 소급 한계 밖 — 조용히 끝낸다
+            return None  # 요금제 소급 한계 밖 — '모름'. 마커를 남기지 않는다
         r.raise_for_status()
         j = r.json()
         rows = j.get('results') or []
@@ -65,7 +65,9 @@ def fetch(sess, key, ticker, ym, tries=4):
                 rows += rr.get('results') or []
                 nxt = rr.get('next_url')
         return rows
-    return []
+    # 429 재시도를 다 쓰고도 못 받았다. 빈 목록을 돌려주면 one() 이 '빈 달'로 오인해 .empty 마커를
+    # 남기고 그 달을 영영 다시 묻지 않는다 — '모름'은 None 으로 돌려 마커 없이 다음 기회에 다시 받게 한다.
+    return None
 
 
 def one(key, ticker, ms, refresh):

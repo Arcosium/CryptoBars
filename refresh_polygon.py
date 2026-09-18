@@ -13,13 +13,15 @@ Starter 구독 동안에는 backfill_polygon.py 를 그대로 쓰면 되고(전�
 
 사용:  python3 refresh_polygon.py --top 1500 --rotate 3500
 """
-import os, json, time, argparse
+import os, re, json, time, argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 
 import backfill_polygon as bp   # 유니버스·월 계산·수집은 전부 재사용
 
 STATE = os.path.join(bp.DATA, 'refresh_state.json')
+# 나스닥·NYSE 테스트 심볼(ZVZZT·ZAZZT·ZZZTS·ZTEST·ATEST …) — 실거래 아님
+TEST_SYMBOL = re.compile(r'^(Z[A-Z]ZZT|ZZZ[A-Z]*|[A-Z]?TEST)$')
 
 
 def top_by_dollar_volume(key, n):
@@ -79,7 +81,17 @@ def main():
     universe = set(names)
 
     top, day = top_by_dollar_volume(key, a.top)
-    top = [t for t in top if t in universe]       # 유니버스 밖 신규 상장은 백필 몫
+    # 거래대금 상위인데 유니버스에 없으면 신규 상장이다. 유니버스가 고정 파일이라 여기서 편입하지 않으면
+    # 영영 안 들어온다(9/18 첫 실행에 '상위 1499'로 드러남). 거래소 테스트 심볼은 grouped 에 거래량이 잡혀
+    # 상위권에 섞이므로 걸러낸다. 새 종목은 파일이 없어 이번 달 포함 13개월을 자연히 다 받는다.
+    new = [t for t in top if t not in universe and not TEST_SYMBOL.match(t)]
+    if new:
+        with open(bp.UNIVERSE, 'a') as f:
+            f.write('\n'.join(new) + '\n')
+        names += new
+        universe |= set(new)
+        print(f'신규 상장 편입 {len(new)}: {new[:12]}', flush=True)
+    top = [t for t in top if t in universe]
     rest = [t for t in names if t not in set(top)]
 
     cur = load_cursor() % max(len(rest), 1)
