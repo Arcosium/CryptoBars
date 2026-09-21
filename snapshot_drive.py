@@ -56,6 +56,17 @@ def usa_pieces():
 
 def krx_pieces():
     root = os.path.join(DATA, 'KRX')
+    db = os.path.join(root, 'bars_ohlc.db')
+    # 2026-09-21 에 journal_mode 를 WAL 로 바꿨다. WAL 이면 최근 트랜잭션이 -wal 에만 있어
+    # db 파일만 tar 로 뜨면 그만큼 유실된다. 체크포인트로 본 파일에 합친 뒤 담는다
+    # (-wal·-shm 을 조각에 넣는 방법도 있지만, 합쳐 두면 복원이 파일 하나로 끝난다).
+    if os.path.exists(db):
+        try:
+            import sqlite3
+            with sqlite3.connect(db, timeout=60) as c:
+                c.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+        except Exception as exc:
+            print(f'  wal_checkpoint 실패 {type(exc).__name__} — -wal 내용이 빠질 수 있다', flush=True)
     fs = [os.path.join(root, f) for f in ('bars_ohlc.db', 'universe.csv', 'universe_all.csv')
           if os.path.exists(os.path.join(root, f))]
     return [('krx-1m', fs)]

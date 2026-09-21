@@ -36,7 +36,15 @@ def trading_days(start):
 
 
 def open_out():
-    c = sqlite3.connect(OUT)
+    # timeout 60: 잠금 경합에 바로 죽지 않게 한다(기본 5초). 2026-09-21 에 상태 확인용 count(*) 쿼리가
+    # DB 를 오래 잠그자 commit 이 OperationalError 로 터져 백필이 죽었다.
+    # WAL: journal_mode=delete 는 읽는 동안 쓰기를 막는다. WAL 이면 조회와 수집이 공존한다.
+    # (전환은 배타 잠금이 필요해 다른 연결이 붙어 있으면 조용히 실패한다 — 다음 단독 실행에서 적용된다.)
+    c = sqlite3.connect(OUT, timeout=60)
+    try:
+        c.execute('PRAGMA journal_mode=WAL')
+    except sqlite3.OperationalError:
+        pass
     c.execute('''CREATE TABLE IF NOT EXISTS bars(
         code TEXT NOT NULL, ts TEXT NOT NULL,
         o REAL, h REAL, l REAL, c REAL, v REAL,
