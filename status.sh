@@ -24,6 +24,9 @@ echo "  DB $(du -h "$V/KRX/bars_ohlc.db" | cut -f1)  journal=$(python3 -c "
 import sqlite3;print(sqlite3.connect('file:$V/KRX/bars_ohlc.db?mode=ro',uri=True).execute('pragma journal_mode').fetchone()[0])" 2>/dev/null)"
 echo "  백필기 실패 누계 $(grep -cE '^  [0-9]{8} [0-9]{6} 실패' "$V/KRX/backfill_kis.log")건 (done 에 안 남아 갱신이 메운다)"
 
+echo "  토스 백필(2022-11-23~2025-09-07) $(grep -E '^ *[0-9]+/[0-9]+ ' "$V/KRX/backfill_toss.log" 2>/dev/null | tail -1 | sed 's/^ *//')"
+echo "  토스 실패 $(grep -c ' 실패 ' "$V/KRX/backfill_toss.log" 2>/dev/null)건 (done 에 안 남아 재실행이 메운다)  DB $(du -h "$V/KRX/bars_toss.db" 2>/dev/null | cut -f1)"
+
 echo "[미국]"
 echo "  종목 $(ls "$V/USA/1m" | wc -l)  용량 $(du -sh "$V/USA/1m" | cut -f1)  빈달마커 $(find "$V/USA/1m" -name '*.empty' | wc -l)"
 journalctl --user -u cryptobars-usa.service --no-pager 2>/dev/null \
