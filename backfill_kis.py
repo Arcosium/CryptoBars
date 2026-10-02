@@ -100,7 +100,10 @@ async def main():
             conn.execute('INSERT OR IGNORE INTO done VALUES(?,?)', (code, day))
             conn.commit()
             got += len(rows)
-        total = conn.execute('SELECT COUNT(*) FROM bars').fetchone()[0]
+        # count(*) 는 1.6억 행 전수 스캔이라 캐시에서 밀리면 60초다(2026-10-02 실측) — 거래일마다 돌면 일일 갱신이
+        # 수 시간 늘어진다(9/30 40분 지연). 지우는 코드가 없고 INSERT OR IGNORE 는 rowid 를 소모하지 않아
+        # max(rowid) 가 행 수와 같다(10-02 대조: 162,502,468 일치). 행을 지우게 되면 이 등식이 깨진다.
+        total = conn.execute('SELECT MAX(rowid) FROM bars').fetchone()[0] or 0
         print(f'{day}  신규봉 {got:>7,}  건너뜀 {skipped:>4}  실패 {failed:>3}  '
               f'누적 {total:,}  {dt.datetime.now(KST):%H:%M:%S}', flush=True)
 

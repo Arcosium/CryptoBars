@@ -70,11 +70,24 @@ def fetch(sess, key, ticker, ym, tries=4):
     return None
 
 
-def one(key, ticker, ms, refresh):
+def settled_at(ym):
+    """ym 달의 1분봉이 다 들어오는 시각(epoch) — 다음 달 1일 01:30 UTC(=10:30 KST, 일일 갱신 시작).
+    마지막 애프터마켓은 20:00 ET = 00:00 UTC(서머타임)·01:00 UTC 에 끝난다. 그 전에 쓴 월 파일은 꼬리가 빠져 있다."""
+    y, m = int(ym[:4]), int(ym[5:])
+    return dt.datetime(y + (m == 12), m % 12 + 1, 1, 1, 30, tzinfo=dt.timezone.utc).timestamp()
+
+
+def one(key, ticker, ms, refresh, recheck=False):
+    """recheck: 지난 달 파일이 그 달이 끝나기 전에 쓰였으면(mtime < settled_at) 한 번 더 받는다.
+    갱신용. 날짜(매월 1~3일)로 직전 달을 다시 받으면 순환 종목은 그 사흘 안에 차례가 안 올 때 꼬리가 영영 빈다
+    (2026-10-02: 9월 파일 표본 81% 가 9월 말 이전 상태). 파일 시각으로 보면 종목마다 딱 한 번만 다시 받는다."""
     sess = requests.Session()
     d = os.path.join(OUT, ticker)
     os.makedirs(d, exist_ok=True)
     fresh = set(ms[-refresh:]) if refresh else set()
+    if recheck:
+        fresh |= {ym for ym in ms if os.path.exists(p := os.path.join(d, f'{ym}.parquet'))
+                  and os.path.getmtime(p) < settled_at(ym)}
     # 지난달보다 과거인 달이 비어 있으면 영원히 빈 달이다(상장 전·상폐 후). `.empty` 마커로 기억해
     # 다시 묻지 않는다. 이게 없으면 재시작·갱신 때마다 빈 달을 전부 재요청한다 — 받은 5,139종목에서
     # 11만 건(81분)이었고, 무료 5회/분에서는 상폐 종목 하나가 13요청씩 먹어 일일 갱신이 안 끝난다.

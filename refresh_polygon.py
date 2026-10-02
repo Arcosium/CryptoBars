@@ -11,6 +11,9 @@
 Starter 구독 동안에는 backfill_polygon.py 를 그대로 쓰면 되고(전체가 7분),
 무료 전환 뒤 타이머의 ExecStart 를 이 스크립트로 바꾼다.
 
+한 번 실행은 --budget-hours(기본 19h) 안에서 끝낸다. 넘치면 남은 순환 종목은 다음 날로 넘기고, 커서는
+앞에서부터 연속으로 끝난 만큼만 전진해 100종목마다 저장한다(2026-10-01 20h 타임아웃 사고 후).
+
 사용:  python3 refresh_polygon.py --top 1500 --rotate 3500
 """
 import os, re, json, time, argparse
@@ -60,6 +63,8 @@ def main():
     ap.add_argument('--workers', type=int, default=1, help='무료 5회/분이라 1이 맞다')
     ap.add_argument('--min-interval', type=float, default=12.0,
                     help='요청 간 최소 간격(초). 12 = 5회/분 = 무료 상한')
+    ap.add_argument('--budget-hours', type=float, default=19.0,
+                    help='이 시간이 지나면 남은 종목은 다음 실행으로 넘긴다(유닛 TimeoutStartSec 20h 보다 짧게)')
     a = ap.parse_args()
 
     # 무료 상한에 맞춰 요청 간격을 강제한다. 429 를 맞고 재시도하는 것보다 예측 가능하고
@@ -100,8 +105,8 @@ def main():
         batch += rest[:a.rotate - len(batch)]
     nxt = (cur + a.rotate) % max(len(rest), 1)
 
-    # 월이 바뀌고 며칠간은 직전 달도 함께 본다 — 그 달 마지막 거래일이 빠지지 않게.
-    refresh = 2 if int(time.strftime('%d')) <= 3 else a.refresh
+    # 지난 달 꼬리는 날짜가 아니라 파일 시각으로 다시 받는다(bp.one recheck). 예전엔 매월 1~3일에 전 종목
+    # 직전 달을 다시 받아 요청이 2배가 됐고, 10/1 에 29시간짜리가 되어 20h 타임아웃에 죽었다.
     ms = bp.months(1)
     targets = top + batch
     print(f'기준일 {day}  상위 {len(top)} + 순환 {len(batch)} = {len(targets)}종목  '
@@ -109,23 +114,49 @@ def main():
           flush=True)
 
     t0 = time.time()
-    done = bars = fail = 0
+    deadline = t0 + a.budget_hours * 3600
+
+    def job(t):
+        if time.time() > deadline:
+            return None                           # 시간 초과 — 받지 않고 다음 실행에 넘긴다
+        return bp.one(key, t, ms, a.refresh, recheck=True)
+
+    # 커서는 순환 묶음에서 '앞에서부터 연속으로 끝난' 만큼만 전진한다. 예전엔 끝에서만 저장해서
+    # 타임아웃으로 죽으면 진행분이 통째로 사라지고 다음 날 같은 묶음을 처음부터 다시 했다.
+    pos = {t: i for i, t in enumerate(batch)}
+    finished, head = set(), 0
+
+    def checkpoint(**kw):
+        save_cursor((cur + head) % max(len(rest), 1), top=len(top), rotate=head, bars=bars, fail=fail,
+                    took_s=int(time.time() - t0), **kw)
+
+    done = bars = fail = skipped = 0
     with ThreadPoolExecutor(a.workers) as ex:
-        futs = {ex.submit(bp.one, key, t, ms, refresh): t for t in targets}
+        futs = {ex.submit(job, t): t for t in targets}
         for f in as_completed(futs):
+            t = futs.pop(f)
             try:
-                _, _, b = f.result()
-                bars += b
+                r = f.result()
+                if r is None:
+                    skipped += 1
+                    continue
+                bars += r[2]
             except Exception as exc:
-                fail += 1
-                print(f'  {futs[f]} 실패 {type(exc).__name__}', flush=True)
+                fail += 1                         # 실패도 커서는 넘긴다 — 다음 바퀴에 다시 온다
+                print(f'  {t} 실패 {type(exc).__name__}', flush=True)
             done += 1
+            if t in pos:
+                finished.add(pos[t])
+                while head in finished:
+                    head += 1
+            if done % 100 == 0:
+                checkpoint(partial=True)
             if done % 500 == 0:
                 print(f'  {done}/{len(targets)}  {bars:,}봉  {(time.time()-t0)/60:.0f}분', flush=True)
 
-    save_cursor(nxt, top=len(top), rotate=len(batch), bars=bars, fail=fail,
-                took_s=int(time.time() - t0))
-    print(f'완료: {done}종목  {bars:,}봉  실패 {fail}  {(time.time()-t0)/60:.1f}분', flush=True)
+    checkpoint()
+    msg = f'  시간 초과로 {skipped}종목 다음 실행에 넘김(커서 {cur}→{(cur + head) % max(len(rest), 1)})' if skipped else ''
+    print(f'완료: {done}종목  {bars:,}봉  실패 {fail}  {(time.time()-t0)/60:.1f}분{msg}', flush=True)
 
 
 if __name__ == '__main__':

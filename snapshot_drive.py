@@ -15,6 +15,7 @@ Polygon 구독 취소로 한 달 뒤 소급이 2년으로 줄고, KIS 는 250거
 사용:
   python3 snapshot_drive.py --source usa      # 연도별 조각
   python3 snapshot_drive.py --source krx      # sqlite 통째(1년치)
+  python3 snapshot_drive.py --source toss     # 토스 1분봉 2022-11~2025-09(불변, 한 번 올리면 지문으로 건너뜀)
   python3 snapshot_drive.py --source crypto   # history·export 통째
   python3 snapshot_drive.py --source all --dry-run
 """
@@ -54,12 +55,8 @@ def usa_pieces():
     return [(f'usa-1m-{y}', sorted(v)) for y, v in sorted(years.items())]
 
 
-def krx_pieces():
-    root = os.path.join(DATA, 'KRX')
-    db = os.path.join(root, 'bars_ohlc.db')
-    # 2026-09-21 에 journal_mode 를 WAL 로 바꿨다. WAL 이면 최근 트랜잭션이 -wal 에만 있어
-    # db 파일만 tar 로 뜨면 그만큼 유실된다. 체크포인트로 본 파일에 합친 뒤 담는다
-    # (-wal·-shm 을 조각에 넣는 방법도 있지만, 합쳐 두면 복원이 파일 하나로 끝난다).
+def _checkpoint(db):
+    # WAL 이면 최근 트랜잭션이 -wal 에만 있어 db 파일만 tar 로 뜨면 그만큼 유실된다 — 본 파일에 합친 뒤 담는다.
     if os.path.exists(db):
         try:
             import sqlite3
@@ -67,9 +64,27 @@ def krx_pieces():
                 c.execute('PRAGMA wal_checkpoint(TRUNCATE)')
         except Exception as exc:
             print(f'  wal_checkpoint 실패 {type(exc).__name__} — -wal 내용이 빠질 수 있다', flush=True)
+
+
+def krx_pieces():
+    root = os.path.join(DATA, 'KRX')
+    db = os.path.join(root, 'bars_ohlc.db')
+    # 2026-09-21 에 journal_mode 를 WAL 로 바꿨다. WAL 이면 최근 트랜잭션이 -wal 에만 있어
+    # db 파일만 tar 로 뜨면 그만큼 유실된다. 체크포인트로 본 파일에 합친 뒤 담는다
+    # (-wal·-shm 을 조각에 넣는 방법도 있지만, 합쳐 두면 복원이 파일 하나로 끝난다).
+    _checkpoint(db)
     fs = [os.path.join(root, f) for f in ('bars_ohlc.db', 'universe.csv', 'universe_all.csv')
           if os.path.exists(os.path.join(root, f))]
     return [('krx-1m', fs)]
+
+
+def toss_pieces():
+    """토스 1분봉(2022-11-23~2025-09-05). 과거 구간이라 내용이 고정 — 지문이 그대로면 매주 건너뛴다."""
+    root = os.path.join(DATA, 'KRX')
+    db = os.path.join(root, 'bars_toss.db')
+    _checkpoint(db)
+    fs = [os.path.join(root, f) for f in ('bars_toss.db', 'verify_toss.json') if os.path.exists(os.path.join(root, f))]
+    return [('krx-toss-1m', fs)] if fs else []
 
 
 def crypto_pieces():
@@ -83,7 +98,7 @@ def crypto_pieces():
     return out
 
 
-SOURCES = {'usa': usa_pieces, 'krx': krx_pieces, 'crypto': crypto_pieces}
+SOURCES = {'usa': usa_pieces, 'krx': krx_pieces, 'toss': toss_pieces, 'crypto': crypto_pieces}
 
 
 def load_state():
@@ -128,7 +143,7 @@ def archive_and_upload(name, paths, dry):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--source', default='all', choices=['all', 'usa', 'krx', 'crypto'])
+    ap.add_argument('--source', default='all', choices=['all', 'usa', 'krx', 'toss', 'crypto'])
     ap.add_argument('--dry-run', action='store_true')
     ap.add_argument('--force', action='store_true', help='지문이 같아도 다시 올린다')
     a = ap.parse_args()
