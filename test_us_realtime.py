@@ -24,6 +24,18 @@ def test_ohlcv_and_older_ticks_do_not_overwrite(tmp_path,monkeypatch):
     assert d.execute('SELECT open,high,low,close,volume FROM bars').fetchone()==(10.,12.,10.,12.,5.)
 
 
+def test_operating_minute_universe_precedes_comparison_and_alphabetical_symbols():
+    import json
+    d=sqlite3.connect(':memory:')
+    d.executescript('CREATE TABLE paper_books(user_id,market,body);CREATE TABLE minute_validation(strategy_id,body);CREATE TABLE strategy_assignments(user_id,target,strategy_id);')
+    d.execute('INSERT INTO paper_books VALUES(1,?,?)',('us',json.dumps({'holdings':{'NVDA@0':{}}})))
+    d.execute('INSERT INTO paper_books VALUES(-1,?,?)',('us',json.dumps({'holdings':{'OTHER':{}}})))
+    d.execute("INSERT INTO strategy_assignments VALUES(1,'us-paper','active')")
+    d.execute('INSERT INTO minute_validation VALUES(?,?)',('active',json.dumps({'symbols':['MSFT@0','META@0','NVDA@0']})))
+    result=live.priority_symbols(d,['A'+str(i) for i in range(50)])
+    assert result[:4]==['NVDA','MSFT','META','OTHER'] and len(result)==40
+
+
 @pytest.mark.parametrize('stamp,daytime,boundary',[
     ('2026-10-14T09:59:59+09:00',False,'2026-10-14T10:00:00+09:00'),
     ('2026-10-14T10:00:00+09:00',True,'2026-10-14T17:00:00+09:00'),

@@ -46,7 +46,7 @@ CYCLE_SECOND = int(os.getenv("CRYPTOBARS_CYCLE_SECOND", "8"))
 LOOKBACK = int(os.getenv("CRYPTOBARS_LOOKBACK", "5"))
 # 기동 직후 1회. 재시작 공백을 메운다(4시간).
 BACKFILL = int(os.getenv("CRYPTOBARS_BACKFILL", "240"))
-FLUSH_MINUTES = int(os.getenv("CRYPTOBARS_FLUSH_MINUTES", "10"))
+FLUSH_MINUTES = int(os.getenv("CRYPTOBARS_FLUSH_MINUTES", "1"))
 UNIVERSE_TTL_H = int(os.getenv("CRYPTOBARS_UNIVERSE_TTL_H", "6"))
 # 하루 한 번 지난 날짜 버퍼를 history(정본)로 접는다. 백필이 도는 동안엔 0 으로 꺼둔다.
 COMPACT = os.getenv("CRYPTOBARS_COMPACT", "1") not in ("0", "false", "")
@@ -220,7 +220,7 @@ def run_forever(stop=None, cycles=None):
         limit = LOOKBACK                             # 백필은 1회만
         done += 1
 
-        if time.time() - last_flush >= FLUSH_MINUTES * 60:
+        if FLUSH_MINUTES <= 1 or time.time() - last_flush >= FLUSH_MINUTES * 60:
             try:
                 log.info("flush: %d행 저장", store.flush())
             except Exception as e:

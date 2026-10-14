@@ -62,17 +62,24 @@ def subscription_window(now=None):
     return daytime,boundary
 
 
+def priority_symbols(d,fallback):
+    """The operating account and its minute model take the quotation slots first."""
+    symbols=[];comparison=[]
+    for uid,body in d.execute("SELECT user_id,body FROM paper_books WHERE market='us' ORDER BY user_id DESC"):
+        (symbols if uid>0 else comparison).extend(json.loads(body).get('holdings',{}))
+    if d.execute("SELECT 1 FROM sqlite_master WHERE name='minute_validation'").fetchone():
+        for (body,) in d.execute("SELECT v.body FROM minute_validation v JOIN strategy_assignments a ON a.strategy_id=v.strategy_id WHERE a.target='us-paper' AND a.user_id>0"):
+            symbols.extend(json.loads(body).get('symbols',[]))
+    return list(dict.fromkeys(s.split('@')[0] for s in symbols+comparison+fallback))[:40]
+
+
 def subscriptions(now=None):
     sys.path.insert(0,str(ROOT.parent/'ArcTrade'))
     from autofolio.research_input import paths
     from autofolio.store import connect as books
     import pyarrow.parquet as pq
-    symbols=[]
-    with books() as d:
-        for r in d.execute("SELECT body FROM paper_books WHERE market='us'"):
-            symbols.extend(json.loads(r[0]).get('holdings',{}))
     panel=pq.ParquetFile(paths('us')[0]).read(columns=['symbol'],use_threads=False).column(0).to_pylist()
-    symbols=list(dict.fromkeys(s.split('@')[0] for s in symbols+sorted(set(panel))))[:40]
+    with books() as d:symbols=priority_symbols(d,sorted(set(panel)))
     exchanges={}
     for name in ['nasmst','nysmst','amsmst']:
         r=requests.get('https://new.real.download.dws.co.kr/common/master/'+name+'.cod.zip',timeout=20);r.raise_for_status()
