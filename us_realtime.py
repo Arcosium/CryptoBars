@@ -5,7 +5,7 @@ Master exchange codes come from the official KIS daily symbol masters.
 """
 import asyncio, json, math, time, sqlite3, sys, io, zipfile, fcntl
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import requests
 import websockets
@@ -47,7 +47,22 @@ def store_tick(d,tick):
     return True
 
 
-def subscriptions():
+def subscription_window(now=None):
+    """KIS day market ends at the US premarket open (04:00 New York).
+
+    Official timetable: truefriend.com/main/bond/research/_static/TF03ca050001.jsp
+    10:00-17:00 KST during US DST, otherwise 10:00-18:00.
+    """
+    local=(now or datetime.now(ZoneInfo('Asia/Seoul'))).astimezone(ZoneInfo('Asia/Seoul'))
+    opening=local.replace(hour=10,minute=0,second=0,microsecond=0)
+    closing=local.replace(hour=17 if local.astimezone(ZoneInfo('America/New_York')).dst() else 18,
+                          minute=0,second=0,microsecond=0)
+    daytime=opening<=local<closing
+    boundary=closing if daytime else opening if local<opening else opening+timedelta(days=1)
+    return daytime,boundary
+
+
+def subscriptions(now=None):
     sys.path.insert(0,str(ROOT.parent/'ArcTrade'))
     from autofolio.research_input import paths
     from autofolio.store import connect as books
@@ -65,7 +80,7 @@ def subscriptions():
         for line in z.read(z.namelist()[0]).decode('cp949','replace').splitlines():
             f=line.split('\t')
             if len(f)>5:exchanges[f[4]]=f[2]
-    local=datetime.now(ZoneInfo('Asia/Seoul'));daytime=10<=local.hour<16
+    daytime,_=subscription_window(now)
     return [(('R'+{'NAS':'BAQ','NYS':'BAY','AMS':'BAA'}[exchanges[s]]) if daytime else 'D'+exchanges[s])+s for s in symbols if s in exchanges]
 
 
@@ -74,13 +89,17 @@ async def session(d):
     broker=read_broker()
     if not broker:raise ValueError('KIS quotation credentials unavailable')
     r=requests.post('https://openapi.koreainvestment.com:9443/oauth2/Approval',json={'grant_type':'client_credentials','appkey':broker.app_key,'secretkey':broker.app_secret},timeout=20);r.raise_for_status();approval=r.json()['approval_key']
-    keys=subscriptions();received=0;accepted=0;started=time.time();seen=set()
+    subscribed_at=datetime.now(ZoneInfo('Asia/Seoul'))
+    _,boundary=subscription_window(subscribed_at)
+    keys=subscriptions(subscribed_at);received=0;accepted=0;started=time.time();seen=set()
+    deadline=min(started+1800,boundary.timestamp())
+    if deadline<=time.time():return
     async with websockets.connect('ws://ops.koreainvestment.com:21000',ping_interval=None,max_size=2**20) as ws:
         for key in keys:
             await ws.send(json.dumps({'header':{'approval_key':approval,'custtype':'P','tr_type':'1','content-type':'utf-8'},'body':{'input':{'tr_id':'HDFSCNT0','tr_key':key}}}));await asyncio.sleep(.15)
         save_status(d,state='subscribed',symbols=len(keys),accepted=accepted,received=received)
-        while time.time()-started<1800:
-            try:message=await asyncio.wait_for(ws.recv(),timeout=45)
+        while (remaining:=deadline-time.time())>0:
+            try:message=await asyncio.wait_for(ws.recv(),timeout=min(45,remaining))
             except asyncio.TimeoutError:
                 save_status(d,state='waiting_ticks',symbols=len(keys),accepted=accepted,received=received);continue
             if message.startswith('0|'):
@@ -111,8 +130,9 @@ async def main():
     d=connect()
     while True:
         try:await session(d)
-        except Exception as exc:save_status(d,state='retrying',error=type(exc).__name__)
-        await asyncio.sleep(60)
+        except Exception as exc:
+            save_status(d,state='retrying',error=type(exc).__name__)
+            await asyncio.sleep(60)
 
 if __name__=='__main__':
     with (DB.parent/'us-realtime.lock').open('a') as lock:
