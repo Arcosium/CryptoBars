@@ -1,0 +1,13 @@
+[Unit]
+Description=KIS US zero-delay execution minute collector
+After=network-online.target
+[Service]
+WorkingDirectory=/home/arcosium/projects/CryptoBars
+ExecStart=/usr/bin/python3 us_realtime.py
+Restart=on-failure
+RestartSec=60
+CPUQuota=50%
+MemoryMax=1G
+UMask=0077
+[Install]
+WantedBy=default.target

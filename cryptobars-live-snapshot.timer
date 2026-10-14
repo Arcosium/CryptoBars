@@ -1,0 +1,7 @@
+[Unit]
+Description=Hourly live-market Drive snapshot
+[Timer]
+OnCalendar=*-*-* *:25:00
+Persistent=true
+[Install]
+WantedBy=timers.target

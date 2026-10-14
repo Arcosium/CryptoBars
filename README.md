@@ -17,7 +17,8 @@ KRX의 기존 수집 로직은 `equities.py`가 불러 실행한다. `cryptobars
 | `KRX/universe.csv` | 기존 국내 주식 유니버스 |
 | `NXT/bars.db` | KIS NX 시세의 완성 OHLCV 분봉 |
 | `bars/`, `history/`, `export/` | 기존 크립토 Parquet와 내보내기 |
-| `USA/` | ArcTrade 조회 시 갱신하는 미국 일봉 캐시 |
+| `USA/` | 기존 Polygon 분봉 백필·일봉 캐시 |
+| `USA/realtime.db` | KIS HDFSCNT0 체결가·실제 관측 OHLCV 분봉 |
 | `equities_status.json` | KRX·NXT 수집 상태 |
 
 QuantInSight의 기존 `data/bars.db` 경로도 KRX 파일로 연결한다. 수집기는 하나만 실행하며 기존 조회 코드는 같은 자료를 계속 읽는다. KRX의 종가만 있는 과거 봉을 임의의 OHLC로 바꾸지 않는다. NXT는 국내 유니버스 중 실제 시세가 반환되는 종목을 수집하며 없는 봉을 만들지 않는다. 최근 봉부터 마지막 저장 시각까지 거슬러 조회해 당일 중단 구간을 복구한다. API가 제공하지 않는 이전 거래일의 누락 구간은 임의로 채우지 않는다.
@@ -114,3 +115,9 @@ df = read_bars("base = 'BTC'")     # (ts, base) 중복 제거된 DataFrame
 - **`quote_volume` 은 hyperliquid·paradex 에서 null** 이다. 거래소가 안 준다 —
   `close × volume` 으로 지어내지 않는다.
 - 코인 quote perp(`ETHBTC` 등)는 제외한다. 거래대금 단위가 달러가 아니라 비교가 안 된다.
+
+## 미국 실시간과 Drive 보완 백업 (2026-10-14)
+
+`us_realtime.py`는 KIS 공식 종목 마스터의 거래소 코드로 최대 40종목을 구독합니다. 주간 RBAQ/RBAY/RBAA, 그 외 DNAS/DNYS/DAMS 체결을 수집합니다. 기존 지연 백필은 과거 자료 보완용으로 남기고 신규 실시간 자료는 별도 DB에 보존합니다. 거래가 없는 분을 임의 생성하지 않으며 관측 시작 이전 구간은 없습니다.
+
+`live_snapshot.py`는 수집기를 멈추지 않고 SQLite 온라인 백업으로 KRX 종가 분봉·NXT·미국 실시간 DB를 복제한 뒤, 디스크에 저장된 크립토 당일 버퍼와 함께 Drive `market-data-snapshot`으로 올립니다. 원격 크기와 MD5가 같을 때만 성공 장부를 기록합니다. 매시 25분 실행하며 UTC 날짜별 아카이브를 갱신합니다. 과거 OHLCV·월별 크립토·미국 백필은 기존 일요일 03시 전체 이력 백업을 유지합니다. 아직 메모리에만 있는 크립토 버퍼는 다음 flush 이후 백업됩니다.

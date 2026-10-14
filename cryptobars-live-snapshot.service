@@ -1,0 +1,12 @@
+[Unit]
+Description=Consistent live KRX NXT US crypto snapshot to Google Drive
+After=network-online.target
+[Service]
+Type=oneshot
+WorkingDirectory=/home/arcosium/projects/CryptoBars
+ExecStart=/usr/bin/python3 live_snapshot.py
+TimeoutStartSec=3600
+CPUQuota=100%
+MemoryMax=2G
+Nice=15
+UMask=0077
