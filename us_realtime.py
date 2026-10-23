@@ -78,7 +78,10 @@ def subscriptions(now=None):
     from autofolio.research_input import paths
     from autofolio.store import connect as books
     import pyarrow.parquet as pq
-    panel=pq.ParquetFile(paths('us')[0]).read(columns=['symbol'],use_threads=False).column(0).to_pylist()
+    current=paths('us')[0]
+    # Today's window input is built only after the US close, so the live session reads the latest one.
+    source=current if current.exists() else max(current.parent.parent.glob('*/us.parquet'),key=lambda p:p.parent.name)
+    panel=pq.ParquetFile(source).read(columns=['symbol'],use_threads=False).column(0).to_pylist()
     with books() as d:symbols=priority_symbols(d,sorted(set(panel)))
     exchanges={}
     for name in ['nasmst','nysmst','amsmst']:
