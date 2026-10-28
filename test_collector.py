@@ -69,6 +69,26 @@ def test_kline_normalization():
         assert set(r) == {f.name for f in SCHEMA}, f"{venue}: 스키마 불일치 {set(r)}"
 
 
+
+def test_bybit_rate_limit_retries_then_names_the_error():
+    limited = {"retCode": 10006, "retMsg": "Too many visits.", "result": {}}
+    ok = {"retCode": 0, "result": {"list": [["1785877020000", "1", "1", "1", "1", "1", "1"]]}}
+
+    class Seq(FakeClient):
+        def get(self, *a, **k):
+            return FakeResp(self._p.pop(0))
+
+    sleep, venues.time.sleep = venues.time.sleep, lambda s: None
+    try:
+        assert len(venues.kl_bybit(Seq([limited, limited, ok]), "SYM", "BTC", 5, NOW)) == 1
+        try:
+            venues.kl_bybit(Seq([limited] * 4), "SYM", "BTC", 5, NOW)
+            raise AssertionError("rate limit 이 계속되면 실패로 남아야 한다")
+        except RuntimeError as e:
+            assert "10006" in str(e)
+    finally:
+        venues.time.sleep = sleep
+
 def test_store_dedupes_and_partitions_by_date():
     def row(ts, base, close):
         return {"ts": ts, "venue": "binance", "base": base, "symbol": base + "USDT",

@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 
 import httpx
@@ -121,8 +122,15 @@ def kl_binance(c, sym, base, limit, now_ms):
 
 
 def kl_bybit(c, sym, base, limit, now_ms):
-    r = c.get(f"{REST['bybit']}/v5/market/kline",
-              params={"category": "linear", "symbol": sym, "interval": "1", "limit": limit}).json()
+    # 매분 340여 종목을 몰아 받으면 retCode 10006(IP rate limit)이 2할가량 섞인다. 잠깐 쉬고 다시 받는다.
+    for wait in (1, 2, 4, 0):
+        r = c.get(f"{REST['bybit']}/v5/market/kline",
+                  params={"category": "linear", "symbol": sym, "interval": "1", "limit": limit}).json()
+        if r.get("retCode") != 10006 or not wait:
+            break
+        time.sleep(wait)
+    if r.get("retCode"):
+        raise RuntimeError(f"bybit {r.get('retCode')}: {r.get('retMsg')}")
     return [_row(k[0], "bybit", base, sym, k[1], k[2], k[3], k[4], k[5], k[6])
             for k in r["result"]["list"]]
 
