@@ -128,6 +128,13 @@ def save_status(status):
     tmp.replace(p)
 
 
+async def wait_next_minute(stop):
+    try:
+        await asyncio.wait_for(stop.wait(), max(1, 60 - time.time() % 60 + 5))
+    except asyncio.TimeoutError:
+        pass
+
+
 async def run(stop):
     sys.path.insert(0, str(QIS))
     os.environ["LEADLAG_BARS_DB"] = str(DATA / "KRX" / "bars.db")
@@ -164,31 +171,32 @@ async def run(stop):
                 log.warning("NXT %s: %s", code, type(exc).__name__)
         return {"symbols": count, "rows": rows_count, "errors": empty,
                 "updated_at": datetime.now(KST).isoformat(), "source": "KIS:NX"}
-    try:
+    async def collect_kr(now):
+        try:
+            n = await asyncio.to_thread(kr_cycle)
+            status["KRX"] = {"symbols": n, "updated_at": datetime.now(KST).isoformat(), "source": "Naver:siseJson"}
+        except Exception as exc:
+            status["KRX"]["error"] = type(exc).__name__
+    async def collect_nxt(now):
+        try:
+            status["NXT"] = await nxt_cycle(now)
+        except Exception as exc:
+            status["NXT"]["error"] = type(exc).__name__
+    async def every_minute(name, session, collect):
+        # Each venue keeps its own minute cadence. A shared barrier let a slow
+        # KIS NXT pass (median 219s on 2026-11-16) hold back the 23s KRX crawl,
+        # so 12:59 KRX bars landed after the paper's 3-minute signal window.
         while not stop.is_set():
             now = datetime.now(KST)
-            async def collect_kr():
-                if market_time.in_crawl_session(now):
-                    try:
-                        n = await asyncio.to_thread(kr_cycle)
-                        status["KRX"] = {"symbols": n, "updated_at": datetime.now(KST).isoformat(), "source": "Naver:siseJson"}
-                    except Exception as exc:
-                        status["KRX"]["error"] = type(exc).__name__
-            async def collect_nxt():
-                if nxt_session(now):
-                    try:
-                        status["NXT"] = await nxt_cycle(now)
-                    except Exception as exc:
-                        status["NXT"]["error"] = type(exc).__name__
-            await asyncio.gather(collect_kr(), collect_nxt())
+            if session(now):
+                await collect(now)
+                log.info("%s symbols=%s", name, status[name].get("symbols", 0))
             status["heartbeat"] = datetime.now(KST).isoformat()
             save_status(status)
-            log.info("KRX symbols=%s NXT symbols=%s", status["KRX"].get("symbols",0), status["NXT"].get("symbols",0))
-            delay = max(1, 60 - time.time() % 60 + 5)
-            try:
-                await asyncio.wait_for(stop.wait(), delay)
-            except asyncio.TimeoutError:
-                pass
+            await wait_next_minute(stop)
+    try:
+        await asyncio.gather(every_minute("KRX", market_time.in_crawl_session, collect_kr),
+                             every_minute("NXT", nxt_session, collect_nxt))
     finally:
         nxt.close()
         if broker:

@@ -36,3 +36,39 @@ def test_nxt_recovers_gap_back_to_last_stored_bar():
                                       now=datetime(2026,9,16,10,1,tzinfo=KST)))
     assert calls == ["100100","095859"]
     assert [r[0] for r in rows] == ["202609160957","202609160958","202609160959","202609161000"]
+
+
+def test_slow_nxt_pass_does_not_hold_back_krx_crawl(monkeypatch,tmp_path):
+    """2026-11-16: a 4-minute KIS NXT pass delayed the 12:59 KRX bars past the paper signal window."""
+    import asyncio,sys,types
+    import equities
+    krx,nxt_calls=[0],[]
+    gate=asyncio.Event()
+    class Crawler:
+        def __init__(self,codes):pass
+        def crawl_cycle(self,conn,session):
+            krx[0]+=1;return 1
+    crawler=types.SimpleNamespace(load_universe=lambda:[('005930','fixture')],Crawler=Crawler,
+                                  open_db=lambda:types.SimpleNamespace(close=lambda:None))
+    market_time=types.SimpleNamespace(in_crawl_session=lambda now:True)
+    monkeypatch.setitem(sys.modules,'market_bars',types.SimpleNamespace(crawler=crawler,market_time=market_time))
+    class Broker:
+        async def _get_json(self,*args):
+            nxt_calls.append(args);await gate.wait();return {"rt_cd":"0","output2":[]}
+        async def close(self):pass
+    async def tick(stop):await asyncio.sleep(.01)
+    monkeypatch.setattr(equities,'DATA',tmp_path)
+    monkeypatch.setattr(equities,'read_broker',Broker)
+    monkeypatch.setattr(equities,'nxt_session',lambda now:True)
+    monkeypatch.setattr(equities,'wait_next_minute',tick,raising=False)
+    monkeypatch.setenv('LEADLAG_BARS_DB','unused');monkeypatch.setenv('TIMEFOLIO_UNIVERSE_CSV','unused')
+    async def main():
+        stop=asyncio.Event();task=asyncio.create_task(equities.run(stop))
+        for _ in range(300):
+            if krx[0]>=3:break
+            await asyncio.sleep(.01)
+        crawled,stuck=krx[0],len(nxt_calls)
+        stop.set();gate.set();await asyncio.wait_for(task,5)
+        return crawled,stuck
+    crawled,stuck=asyncio.run(main())
+    assert stuck==1 and crawled>=3
